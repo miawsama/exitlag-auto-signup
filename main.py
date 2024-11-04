@@ -17,65 +17,77 @@ from faker import Faker
 warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
 fake = Faker()
 
-async def get_email(page: ChromiumPage) -> str:
+async def get_email(page: ChromiumPage, bar: tqdm, iteration: int, total: int) -> str:
     """Get a new email address from mails.org"""
     page.listen.start("https://mails.org", method="POST")
     page.get("https://mails.org")
     for _ in range(10):
         result = page.listen.wait()
         if result.url == "https://mails.org/api/email/generate":
+            bar.set_description(f"Generate Email Completed [{iteration + 1}/{total}]")
+            bar.update(0.1)
             return result.response.body["message"]
     return None
-
 
 async def create_account(page: ChromiumPage, tab, email: str, password: str, bar: tqdm) -> bool:
     """Create a new account on exitlag.com"""
     try:
         first_name = fake.first_name()
-        last_name = fake.last_name()        
-        password = generate_password(12)
-
+        last_name = fake.last_name()
+        
         tab.ele(".rc-anchor-logo-img rc-anchor-logo-img-large", timeout=10)
         tab.ele("#inputFirstName").input(first_name)
         tab.ele("#inputLastName").input(last_name)
         tab.ele("#inputEmail").input(email)
-        tab.ele("#inputNewPassword2").input(password)
         tab.ele("#inputNewPassword1").input(password)
+        tab.ele("#inputNewPassword2").input(password)
         await asyncio.sleep(1)
+        
         page.listen.start("https://mails.org", method="POST")
-        await asyncio.sleep(1)
         tab.ele(".custom-checkbox--input checkbox").click()
         bar.set_description("Signup process completed")
-        bar.update(30)
-        # reCAPTCHA button element
+        bar.n += 0.1
+        bar.refresh()
+        
         recaptcha_button = tab.ele(".btn btn-primary btn-block  btn-recaptcha btn-recaptcha-invisible")
-        # Attempt to remove the disabled attribute until it's not disabled anymore
-        max_attempts = 10  # Set a maximum number of attempts to avoid infinite loops
+        max_attempts = 10
         attempts = 0
-
         while attempts < max_attempts:
-            # Check if the recaptcha_button have disabled attr
             if recaptcha_button.attr("disabled") is not None:
                 tab.run_js("arguments[0].removeAttribute('disabled')", recaptcha_button)
                 await asyncio.sleep(0.5)
                 attempts += 1
             else:
                 recaptcha_button.click()
-                # Wait for the URL to change after clicking
+                await asyncio.sleep(2)
+
+                error_element = tab.ele(".alert alert-danger error-payment", timeout=5)
+                if error_element:
+                    print("Error: Payment error message appeared. Re-entering the last generated password.")
+                    tab.ele("#inputNewPassword1").input(password)
+                    tab.ele("#inputNewPassword2").input(password)
+                    recaptcha_button.click()
+                    await asyncio.sleep(2)
+                    error_element = tab.ele(".alert alert-danger error-payment", timeout=5)
+                    if error_element:
+                        print("Error: Payment error message still appears. Account creation failed.")
+                        return False
+
                 if tab.wait.url_change("https://www.exitlag.com/clientarea.php", timeout=60):
+                    bar.set_description("Account created successfully")
+                    bar.n += 0.9
+                    bar.refresh()
                     return True
                 else:
-                    # If the URL did not change, it might mean the button was disabled again
-                    recaptcha_button = tab.ele(".btn btn-primary btn-block  btn-recaptcha btn-recaptcha-invisible")  # Re-fetch the button
+                    recaptcha_button = tab.ele(".btn btn-primary btn-block  btn-recaptcha btn-recaptcha-invisible")
                     attempts = 0
-        # Final check to see if the button is still disabled
+
         if recaptcha_button.attr("disabled") is not None:
             print("Error: reCAPTCHA button is still disabled after multiple attempts.")
             return False
     except Exception as e:
         print(f"Error creating account: {e}")
     return False
-
 
 async def verify_email(page: ChromiumPage, tab, email: str, bar: tqdm) -> bool:
     """Verify the email address"""
@@ -97,21 +109,25 @@ async def verify_email(page: ChromiumPage, tab, email: str, bar: tqdm) -> bool:
                 break
         if link:
             bar.set_description("Visiting verify email link")
-            bar.update(20)
+            bar.n += 0.1
+            bar.refresh()
             tab.get(link)
             await asyncio.sleep(5)
             bar.set_description("Clearing cache and data")
-            bar.update(9)
+            bar.n += 0.1
+            bar.refresh()
             tab.set.cookies.clear()
             tab.clear_cache()
             page.set.cookies.clear()
             page.clear_cache()
             page.quit()
+            bar.set_description("Email verified successfully")
+            bar.n += 0.8
+            bar.refresh()
             return True
     except Exception as e:
-        print(f"Error verifying email: {e}")
+        print(f"Error verifying email: { e}")
     return False
-
 
 def generate_password(length=12):
     """Generate a strong password with uppercase, lowercase, digits, and special characters."""
@@ -136,20 +152,11 @@ def generate_password(length=12):
     random.shuffle(password)
   
     return ''.join(password)
-    
-async def clear_cache_and_cookies(tab):
-    """Clear session storage, cookies, and cache for the given tab."""
-    tab.clear_cache(cookies=True)
-    print("Cleared session storage, cache, and cookies.")
 
 async def main():
     main_library = Main()
     port = ChromiumOptions().auto_port()
-
     await main_library.getSettingsAndBlockIP()
-
-    print("\nEnsuring Chrome availability...")
-
     if browsers.get("chrome") is None:
         print("\nChrome is required for this tool. Please install it via:\nhttps://google.com/chrome")
     else:
@@ -170,21 +177,22 @@ async def main():
                 except ValueError:
                     print("Invalid number given. Please enter a valid number.")
 
-        bar = tqdm(total=execution_count)
+        bar = tqdm(total=execution_count, desc="Account Creation Progress")
 
         for i in range(execution_count):
-            # Create a new session of DrissionPage for each account
             page = ChromiumPage(port)
-            email = await get_email(page)
+            email = await get_email(page, bar, i, execution_count)
             if not email:
                 print("Failed to generate email. Exiting...")
                 continue
             bar.set_description(f"Generate account process completed [{i + 1}/{execution_count}]")
-            bar.update(0.1)
+            bar.n += 0.1
+            bar.refresh()
             tab = page.new_tab("https://www.exitlag.com/register")
             CloudflareBypasser(tab).bypass()
             bar.set_description(f"Bypassed Cloudflare captcha protection [{i + 1}/{execution_count}]")
-            bar.update(0.1)
+            bar.n += 0.1
+            bar.refresh()
             print()
 
             password = generate_password(password_length)
@@ -194,12 +202,17 @@ async def main():
                     accounts.append({"email": email, "password": password})
                     json_accounts.append({"email": email, "password": password})
                     bar.set_description(f"All process completed [{i + 1}/{execution_count}]")
-                    bar.update(0.8)
+                    bar.n += 1
+                    bar.refresh()
                     print()
                 else:
                     print("Failed to verify email. Skipping and continuing...\n")
+                    bar.n += 0.1
+                    bar.refresh()
             else:
                 print("Failed to create account. Exiting...")
+                bar.n += 0.1
+                bar.refresh()
 
             page.quit()
 
