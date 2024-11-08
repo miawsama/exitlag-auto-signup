@@ -1,4 +1,3 @@
-# SOURCE: https://github.com/sarperavci/CloudflareBypassForScraping
 import time
 from DrissionPage import ChromiumPage
 
@@ -38,18 +37,22 @@ class CloudflareBypasser:
                 if "turnstile" in ele.attrs["name"] and ele.attrs["type"] == "hidden":
                     button = ele.parent().shadow_root.child()("tag:body").shadow_root("tag:input")
                     break
-            
+
         if button:
             return button
         else:
-            # If the button is not found, search it recursively
-            self.log_message("Basic search failed. Searching for button recursively.")
-            ele = self.driver.ele("tag:body")
-            iframe = self.search_recursively_shadow_root_with_iframe(ele)
-            if iframe:
-                button = self.search_recursively_shadow_root_with_cf_input(iframe("tag:body"))
+            # Check if the page is already bypassed
+            if not self.is_bypassed():
+                self.log_message("Basic search failed. Checking title before searching recursively.")
+                ele = self.driver.ele("tag:body")
+                iframe = self.search_recursively_shadow_root_with_iframe(ele)
+                if iframe:
+                    button = self.search_recursively_shadow_root_with_cf_input(iframe("tag:body"))
+                else:
+                    self.log_message("Iframe not found. Button search failed.")
             else:
-                self.log_message("Iframe not found. Button search failed.")
+                self.log_message("Already bypassed, no need to search for the button.")
+            
             return button
 
     def log_message(self, message):
